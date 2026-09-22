@@ -35,6 +35,11 @@ Requires a Rust toolchain (`rustup`) alongside Node.
 ## Testing
 
 ```bash
-npm test    # domain unit tests (vitest)
+npm test    # domain, adapter and integration tests (vitest)
 npm run check   # svelte-check / TypeScript
+cargo test  # Rust unit + integration tests (run from src-tauri/)
 ```
+
+The local library scenario (save, search, copy) is walked through in
+[`docs/examples/01-library.md`](docs/examples/01-library.md), including which
+edge cases are covered and where.
