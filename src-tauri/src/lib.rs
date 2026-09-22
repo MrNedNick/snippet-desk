@@ -1,5 +1,5 @@
-mod commands;
-mod db;
+pub mod commands;
+pub mod db;
 
 use db::DbState;
 use std::sync::Mutex;
