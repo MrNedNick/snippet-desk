@@ -3,6 +3,17 @@
 A desktop code snippet library. Find a snippet with a global shortcut and
 paste it straight into whatever editor you're in.
 
+## What works today
+
+- **Library and search** — save snippets, find them with full-text search
+  (SQLite FTS5), copy one to the clipboard.
+- **Editor with highlighting** — edit a snippet in a code field coloured for
+  TypeScript/JavaScript, Rust, Python, SQL, CSS, shell or JSON; Tab indents,
+  ⌘S saves. Every change to the code keeps the previous version, which can be
+  restored into the editor.
+
+Coming next: tags and collections, then the global shortcut.
+
 ## Stack
 
 - [Tauri 2](https://tauri.app/) (Rust) for the native shell
@@ -32,6 +43,11 @@ npm run tauri dev
 
 Requires a Rust toolchain (`rustup`) alongside Node.
 
+`npm run dev` opens the same interface in a plain browser. There the app
+answers its own commands with the same names and failure reasons as the Rust
+side and keeps snippets in browser storage — handy for working on the UI; a
+banner makes clear it is not the desktop app.
+
 ## Testing
 
 ```bash
@@ -40,6 +56,6 @@ npm run check   # svelte-check / TypeScript
 cargo test  # Rust unit + integration tests (run from src-tauri/)
 ```
 
-The local library scenario (save, search, copy) is walked through in
-[`docs/examples/01-library.md`](docs/examples/01-library.md), including which
-edge cases are covered and where.
+Walkthroughs with the edge cases and where each one is tested:
+[library and search](docs/examples/01-library.md),
+[editor, highlighting and earlier versions](docs/examples/02-editor.md).
