@@ -25,8 +25,10 @@ paste it straight into whatever editor you're in.
   import it elsewhere with a preview of what will be added, updated or
   skipped as a duplicate; a backup is made before every import, and any
   backup can be restored (after backing up what it replaces).
-
-Coming next: signed builds and updates.
+- **Signed updates** — the app shows its version, checks the release feed and
+  installs an update only if it is signed with the key the app was built
+  with; a build without the key says so instead of guessing. Tagged
+  releases are built for Linux, macOS and Windows by the release workflow.
 
 ## Stack
 
@@ -75,7 +77,8 @@ Walkthroughs with the edge cases and where each one is tested:
 [editor, highlighting and earlier versions](docs/examples/02-editor.md),
 [tags and collections](docs/examples/03-organize.md),
 [quick search and the clipboard](docs/examples/04-quick.md),
-[import, export and backups](docs/examples/05-backup.md).
+[import, export and backups](docs/examples/05-backup.md),
+[signed builds and updates](docs/examples/06-release.md).
 
 CI runs all of the above on every push and attaches the browser-preview
 build as the `snippet-desk-preview` artifact.
