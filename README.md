@@ -14,8 +14,15 @@ paste it straight into whatever editor you're in.
 - **Tags and collections** — tag snippets (`react, hooks`; any spelling of a
   tag is the same tag) and file them in collections; filter the library by
   collection and tag, and the filter is remembered.
+- **Quick search from anywhere** — a global shortcut (⌘⇧Space by default,
+  changeable) brings up a search box over whatever app you are in; Enter
+  copies the snippet and the window steps aside, so ⌘V pastes it into your
+  editor. Snippets you copied lately come first.
+- **A damaged library is not an empty one** — if the SQLite file can't be
+  read, the app says so instead of crashing or showing nothing, and can set
+  the file aside (never delete it) to start fresh.
 
-Coming next: the global shortcut and pasting into the editor you are in.
+Coming next: import, export and backups.
 
 ## Stack
 
@@ -62,4 +69,8 @@ cargo test  # Rust unit + integration tests (run from src-tauri/)
 Walkthroughs with the edge cases and where each one is tested:
 [library and search](docs/examples/01-library.md),
 [editor, highlighting and earlier versions](docs/examples/02-editor.md),
-[tags and collections](docs/examples/03-organize.md).
+[tags and collections](docs/examples/03-organize.md),
+[quick search and the clipboard](docs/examples/04-quick.md).
+
+CI runs all of the above on every push and attaches the browser-preview
+build as the `snippet-desk-preview` artifact.
