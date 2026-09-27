@@ -1,17 +1,20 @@
+pub mod backup;
 pub mod commands;
 pub mod db;
 pub mod organize;
 pub mod quick;
 pub mod shortcut;
 
-use commands::{ShortcutState, ShortcutStatus};
+use commands::{BackupDir, ImportState, ShortcutState, ShortcutStatus};
 use db::DbState;
 use std::sync::Mutex;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init());
     #[cfg(desktop)]
     let builder = builder.plugin(shortcut::plugin());
 
@@ -36,6 +39,8 @@ pub fn run() {
             };
             app.manage(state);
             app.manage(ShortcutState(Mutex::new(status)));
+            app.manage(ImportState::default());
+            app.manage(BackupDir(data_dir.join("backups")));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -56,6 +61,13 @@ pub fn run() {
             commands::record_snippet_use,
             commands::get_quick_shortcut,
             commands::set_quick_shortcut,
+            commands::export_library,
+            commands::pick_import_file,
+            commands::apply_import,
+            commands::cancel_import,
+            commands::create_backup,
+            commands::list_backups,
+            commands::restore_backup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

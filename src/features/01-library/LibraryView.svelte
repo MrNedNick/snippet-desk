@@ -10,6 +10,7 @@
   import { copyText } from "../../adapters/clipboard";
   import { onQuickSearchRequested, recordSnippetUseRemote } from "../../adapters/quick-store";
   import { IN_APP_KEY, QuickSearch } from "../04-quick";
+  import { BackupPanel } from "../05-backup";
   import { createSnippetRemote, listSnippetsRemote, searchSnippetsRemote } from "../../adapters/snippet-store";
   import { HighlightedCode, SnippetEditor } from "../02-editor";
 
@@ -196,6 +197,7 @@
     <button type="submit" disabled={saving}>{saving ? "Saving…" : "Save snippet"}</button>
   </form>
   <CollectionsPanel {collections} counts={collectionCounts(snippets).byId} onchange={onCollectionsChanged} />
+  <BackupPanel onchange={onCollectionsChanged} />
   </div>
   {/if}
 

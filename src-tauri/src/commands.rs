@@ -1,5 +1,6 @@
 use crate::db::{self, DbState, NewSnippetInput, RevisionDto, SnippetDto, UpdateSnippetInput};
 use crate::organize::{self, CollectionDto};
+use crate::backup;
 use crate::quick;
 use tauri::State;
 
@@ -174,4 +175,122 @@ pub fn set_quick_shortcut(
     quick::save_shortcut(&conn, &accelerator).map_err(|err| err.to_string())?;
     *status = ShortcutStatus { accelerator, registered: true, error: None };
     Ok(status.clone())
+}
+
+/// Archives read from a file and waiting for the user to apply or cancel them, by token.
+#[derive(Default)]
+pub struct ImportState(pub std::sync::Mutex<std::collections::HashMap<String, backup::ImportPlanDto>>);
+
+/// Where backups are written: `<app data>/backups`.
+pub struct BackupDir(pub std::path::PathBuf);
+
+#[derive(serde::Serialize, Debug)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum ExportOutcome {
+    Saved { path: String, snippets: usize },
+    Cancelled,
+}
+
+#[derive(serde::Serialize, Debug)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum StageOutcome {
+    Ready { token: String, plan: backup::ImportPlanDto },
+    Cancelled,
+}
+
+#[derive(serde::Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyOutcome {
+    pub counts: backup::ImportCounts,
+    pub backup: backup::BackupInfo,
+}
+
+/// Opens the save dialog and writes the whole library there as JSON. The path comes from the dialog,
+/// never from the page. `async` so the dialog does not block the main thread it needs.
+#[tauri::command]
+pub async fn export_library(app: tauri::AppHandle, state: State<'_, DbState>) -> Result<ExportOutcome, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let archive = backup::export_archive(&*lock(&state)?).map_err(|err| err.to_string())?;
+    let suggested = format!("snippet-desk-{}.json", archive.exported_at.get(..10).unwrap_or("export"));
+    let Some(target) = app
+        .dialog()
+        .file()
+        .add_filter("Snippet Desk archive", &["json"])
+        .set_file_name(&suggested)
+        .blocking_save_file()
+    else {
+        return Ok(ExportOutcome::Cancelled);
+    };
+    let path = target.into_path().map_err(|err| err.to_string())?;
+    let json = serde_json::to_string_pretty(&archive).map_err(|err| err.to_string())? + "\n";
+    std::fs::write(&path, json).map_err(|err| err.to_string())?;
+    Ok(ExportOutcome::Saved { path: path.display().to_string(), snippets: archive.snippets.len() })
+}
+
+/// Validates an archive's text and keeps its dry-run plan until it is applied or cancelled.
+pub fn stage_import(state: &DbState, imports: &ImportState, text: &str) -> Result<StageOutcome, String> {
+    let archive = backup::parse_archive(text)?;
+    let plan = backup::plan_import(&*state.lock()?, &archive).map_err(|err| err.to_string())?;
+    let token = uuid::Uuid::new_v4().to_string();
+    imports.0.lock().map_err(|_| "import-lock-poisoned".to_string())?.insert(token.clone(), plan.clone());
+    Ok(StageOutcome::Ready { token, plan })
+}
+
+/// Opens the file dialog and returns the import's dry run. Closing the dialog is `cancelled`, not an error.
+#[tauri::command]
+pub async fn pick_import_file(
+    app: tauri::AppHandle,
+    state: State<'_, DbState>,
+    imports: State<'_, ImportState>,
+) -> Result<StageOutcome, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let Some(picked) = app.dialog().file().add_filter("Snippet Desk archive", &["json"]).blocking_pick_file() else {
+        return Ok(StageOutcome::Cancelled);
+    };
+    let path = picked.into_path().map_err(|err| err.to_string())?;
+    let text = std::fs::read_to_string(&path).map_err(|_| "not-json".to_string())?;
+    stage_import(&state, &imports, &text)
+}
+
+/// Backs the library up, then applies the staged plan in one transaction.
+#[tauri::command]
+pub fn apply_import(
+    state: State<DbState>,
+    imports: State<ImportState>,
+    backups: State<BackupDir>,
+    token: String,
+) -> Result<ApplyOutcome, String> {
+    let plan = imports
+        .0
+        .lock()
+        .map_err(|_| "import-lock-poisoned".to_string())?
+        .remove(&token)
+        .ok_or_else(|| "import-not-found".to_string())?;
+    let mut conn = lock(&state)?;
+    let backup = backup::create_backup(&conn, &backups.0, "before-import")?;
+    backup::apply_import(&mut conn, &plan).map_err(|err| err.to_string())?;
+    Ok(ApplyOutcome { counts: plan.counts, backup })
+}
+
+/// Forgets a staged import. Nothing was written, so there is nothing to undo.
+#[tauri::command]
+pub fn cancel_import(imports: State<ImportState>, token: String) -> Result<(), String> {
+    imports.0.lock().map_err(|_| "import-lock-poisoned".to_string())?.remove(&token);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn create_backup(state: State<DbState>, backups: State<BackupDir>) -> Result<backup::BackupInfo, String> {
+    backup::create_backup(&*lock(&state)?, &backups.0, "manual")
+}
+
+#[tauri::command]
+pub fn list_backups(backups: State<BackupDir>) -> Vec<backup::BackupInfo> {
+    backup::list_backups(&backups.0)
+}
+
+/// Restores a backup by name; returns the backup of the state it replaced.
+#[tauri::command]
+pub fn restore_backup(state: State<DbState>, backups: State<BackupDir>, name: String) -> Result<backup::BackupInfo, String> {
+    backup::restore_backup(&mut *lock(&state)?, &backups.0, &name)
 }

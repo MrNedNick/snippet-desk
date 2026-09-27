@@ -4,6 +4,7 @@ import type { Collection, Revision, Snippet } from "../domain/01-library/types";
 import { normalizeTag, validateCollectionName } from "../domain/03-organize/organize";
 import { MAX_TAGS_PER_SNIPPET } from "../domain/03-organize/types";
 import { DEFAULT_SHORTCUT, MAX_RECENT, parseShortcut, recordUse, type UsageEntry } from "../domain/04-quick";
+import { backupName, buildArchive, MAX_BACKUPS, parseArchive, planImport, serializeArchive, type BackupInfo, type ImportPlan } from "../domain/05-backup";
 
 const KEY = "snippet-desk:browser-preview";
 
@@ -111,6 +112,36 @@ export function previewCommands(storage: Storage, now: () => string = () => new 
   };
   const byNewest = (list: Snippet[]) => [...list].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
+  // Backups are whole copies of the preview data under their own keys, named like the desktop's files.
+  const BACKUP_PREFIX = `${KEY}:backup:`;
+  const staged = new Map<string, ImportPlan>();
+  const listBackups = (): BackupInfo[] => {
+    const names: string[] = [];
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i);
+      if (key?.startsWith(BACKUP_PREFIX)) names.push(key.slice(BACKUP_PREFIX.length));
+    }
+    return names
+      .sort()
+      .reverse()
+      .map((name) => {
+        const match = /^snippet-desk-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})Z-(manual|before-import|before-restore)\.sqlite3$/.exec(name);
+        return match
+          ? { name, createdAt: `${match[1]}T${match[2]}:${match[3]}:${match[4]}Z`, reason: match[5] as BackupInfo["reason"] }
+          : null;
+      })
+      .filter((backup): backup is BackupInfo => backup !== null);
+  };
+  const backup = (reason: BackupInfo["reason"]): BackupInfo => {
+    let at = now();
+    // Two backups in the same second would share a name; the desktop overwrites, the preview steps a second on.
+    while (storage.getItem(BACKUP_PREFIX + backupName(at, reason)) !== null) at = new Date(Date.parse(at) + 1000).toISOString();
+    const name = backupName(at, reason);
+    storage.setItem(BACKUP_PREFIX + name, JSON.stringify(data));
+    for (const old of listBackups().slice(MAX_BACKUPS)) storage.removeItem(BACKUP_PREFIX + old.name);
+    return listBackups().find((entry) => entry.name === name)!;
+  };
+
   return (cmd: string, payload?: InvokeArgs): unknown => {
     const args = (payload ?? {}) as Args;
     // Same answers as the desktop app with a damaged file: health and the way out work, nothing else.
@@ -129,6 +160,60 @@ export function previewCommands(storage: Storage, now: () => string = () => new 
     switch (cmd) {
       case "library_health":
         return { status: "ok", detail: null };
+      // The desktop app writes the file through a save dialog; the page downloads this text instead.
+      case "export_library_json":
+        return serializeArchive(buildArchive(data, now()));
+      // The desktop app reads the file through an open dialog; the page hands over the picked file's text.
+      case "stage_import_text": {
+        const archive = parseArchive(String(args.text));
+        if (!archive.ok) {
+          const { reason, index, field } = archive.error;
+          throw [reason, index, field].filter((part) => part !== undefined).join(":");
+        }
+        const plan = planImport(data, archive.value);
+        const token = crypto.randomUUID();
+        staged.set(token, plan);
+        return { status: "ready", token, plan };
+      }
+      case "apply_import": {
+        const plan = staged.get(String(args.token));
+        if (!plan) throw "import-not-found";
+        staged.delete(String(args.token));
+        const made = backup("before-import");
+        const at = now();
+        let snippets = [...data.snippets];
+        let revisions = [...data.revisions];
+        for (const entry of plan.entries) {
+          if (entry.action === "added") snippets.push(entry.snippet);
+          if (entry.action === "updated") {
+            const local = snippets.find((s) => s.id === entry.snippet.id)!;
+            revisions.push({ id: crypto.randomUUID(), snippetId: local.id, code: local.code, note: "Before import", createdAt: at });
+            snippets = snippets.map((s) => (s.id === local.id ? entry.snippet : s));
+          }
+        }
+        revisions = [...revisions, ...plan.revisions.filter((r) => !revisions.some((known) => known.id === r.id))];
+        data = { ...data, snippets, revisions, collections: [...data.collections, ...plan.newCollections] };
+        save();
+        return { counts: plan.counts, backup: made };
+      }
+      case "cancel_import":
+        staged.delete(String(args.token));
+        return null;
+      case "create_backup":
+        return backup("manual");
+      case "list_backups":
+        return listBackups();
+      case "restore_backup": {
+        const name = String(args.name);
+        const raw = listBackups().some((entry) => entry.name === name) ? storage.getItem(BACKUP_PREFIX + name) : null;
+        if (raw === null) throw "backup-not-found";
+        const restored = load({ getItem: () => raw } as unknown as Storage);
+        if (restored.damage) throw `database-corrupted: ${restored.damage}`;
+        const safety = backup("before-restore");
+        data = restored.data;
+        save();
+        return safety;
+      }
       case "set_aside_damaged_library":
         throw "database-not-damaged";
       case "list_recent_uses": {
