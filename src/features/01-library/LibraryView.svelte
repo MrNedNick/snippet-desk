@@ -5,8 +5,11 @@
   import type { LibraryFilter } from "../../domain/03-organize/types";
   import { listCollectionsRemote } from "../../adapters/organize-store";
   import { CollectionsPanel, FilterBar } from "../03-organize";
-  import { copySnippetToClipboard, normalizeSearchQuery } from "../../domain/01-library/operations";
-  import { clipboardWriter } from "../../adapters/clipboard";
+  import { normalizeSearchQuery } from "../../domain/01-library/operations";
+  import { pastePayload } from "../../domain/04-quick";
+  import { copyText } from "../../adapters/clipboard";
+  import { onQuickSearchRequested, recordSnippetUseRemote } from "../../adapters/quick-store";
+  import { IN_APP_KEY, QuickSearch } from "../04-quick";
   import { createSnippetRemote, listSnippetsRemote, searchSnippetsRemote } from "../../adapters/snippet-store";
   import { HighlightedCode, SnippetEditor } from "../02-editor";
 
@@ -81,7 +84,27 @@
     loading = false;
   }
 
-  onMount(() => void Promise.all([loadSnippets(), loadCollections()]));
+  let quickOpen = $state(false);
+  let quickFromShortcut = $state(false);
+
+  function openQuick(fromShortcut: boolean) {
+    quickFromShortcut = fromShortcut;
+    quickOpen = true;
+  }
+
+  function onGlobalKeydown(event: KeyboardEvent) {
+    if (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
+      event.preventDefault();
+      openQuick(false);
+    }
+  }
+
+  onMount(() => {
+    void Promise.all([loadSnippets(), loadCollections()]);
+    // The desktop shell sends this when the global shortcut is pressed in any app.
+    const unsubscribe = onQuickSearchRequested(() => openQuick(true));
+    return () => void unsubscribe.then((stop) => stop());
+  });
 
   async function handleCreate(event: Event) {
     event.preventDefault();
@@ -123,11 +146,14 @@
   }
 
   async function handleCopy(snippet: Snippet) {
-    const result = copySnippetToClipboard(snippet, clipboardWriter);
+    // Awaited, so a clipboard that refuses (no focus, no permission) is reported instead of "Copied".
+    const result = await copyText(pastePayload(snippet).text);
     copyFeedback = {
       ...copyFeedback,
-      [snippet.id]: result.ok ? "Copied" : `Couldn't copy: ${result.error.cause}`,
+      [snippet.id]: result.ok ? "Copied" : `Couldn't copy: ${result.cause}`,
     };
+    // A copy from the list counts as a use too, so the quick search offers it first next time.
+    if (result.ok) void recordSnippetUseRemote(snippet.id);
     setTimeout(() => {
       const { [snippet.id]: _discard, ...rest } = copyFeedback;
       copyFeedback = rest;
@@ -138,6 +164,10 @@
   const collectionName = (id: string | null) => collections.find((c) => c.id === id)?.name ?? null;
   const filtered = $derived(filter.collection !== null || filter.tag !== null);
 </script>
+
+<svelte:window onkeydown={onGlobalKeydown} />
+
+<QuickSearch {snippets} {loading} open={quickOpen} fromShortcut={quickFromShortcut} onclose={() => (quickOpen = false)} />
 
 <section class="library">
   {#if editing}
@@ -170,6 +200,9 @@
   {/if}
 
   <div class="list-panel">
+    <button type="button" class="quick-open" onclick={() => openQuick(false)}>
+      Quick search <kbd>{IN_APP_KEY}</kbd>
+    </button>
     <form class="search-form" onsubmit={handleSearch}>
       <input bind:value={searchTerm} placeholder="Search snippets…" aria-label="Search snippets" />
       <button type="submit">Search</button>
@@ -285,6 +318,18 @@
   .search-form {
     display: flex;
     gap: 0.5rem;
+  }
+
+  .quick-open {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .quick-open kbd {
+    font: 0.8rem ui-monospace, SFMono-Regular, Menlo, monospace;
+    opacity: 0.75;
   }
 
   .search-form input {

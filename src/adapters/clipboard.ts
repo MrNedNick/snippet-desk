@@ -11,3 +11,21 @@ export const clipboardWriter: ClipboardWriter = (text) => {
   }
   void navigator.clipboard.writeText(text);
 };
+
+/**
+ * Writes text and waits for the answer. `writeText` is asynchronous: a denied permission, a page
+ * without focus or a clipboard another app holds rejects the promise *after* the call returns, which
+ * the synchronous writer above cannot see. The quick search uses this one so a failed copy is never
+ * reported as "Copied".
+ */
+export async function copyText(text: string): Promise<{ ok: true } | { ok: false; cause: string }> {
+  if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+    return { ok: false, cause: "clipboard is unavailable" };
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    return { ok: true };
+  } catch (cause) {
+    return { ok: false, cause: cause instanceof Error ? cause.message : String(cause) };
+  }
+}

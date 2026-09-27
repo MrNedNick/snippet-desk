@@ -1,23 +1,41 @@
 pub mod commands;
 pub mod db;
 pub mod organize;
+pub mod quick;
+pub mod shortcut;
 
+use commands::{ShortcutState, ShortcutStatus};
 use db::DbState;
 use std::sync::Mutex;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+    #[cfg(desktop)]
+    let builder = builder.plugin(shortcut::plugin());
+
+    builder
         .setup(|app| {
             let data_dir = app
                 .path()
                 .app_data_dir()
                 .expect("no app data dir available");
-            let conn = db::open_connection(&data_dir.join("snippet-desk.sqlite3"))
-                .expect("failed to open snippet-desk database");
-            app.manage(DbState(Mutex::new(conn)));
+            // A damaged file no longer stops the app from starting: `DbState` remembers the damage and the
+            // page offers to set the file aside.
+            let state = DbState::open(&data_dir.join("snippet-desk.sqlite3"));
+            let accelerator = state
+                .lock()
+                .ok()
+                .and_then(|conn| quick::shortcut(&conn).ok())
+                .unwrap_or_else(|| quick::DEFAULT_SHORTCUT.to_string());
+            // Another app may already own the combination; the app still starts and the page says so.
+            let status = match shortcut::swap(app.handle(), None, &accelerator) {
+                Ok(()) => ShortcutStatus { accelerator, registered: true, error: None },
+                Err(error) => ShortcutStatus { accelerator, registered: false, error: Some(error) },
+            };
+            app.manage(state);
+            app.manage(ShortcutState(Mutex::new(status)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -32,6 +50,12 @@ pub fn run() {
             commands::create_collection,
             commands::rename_collection,
             commands::delete_collection,
+            commands::library_health,
+            commands::set_aside_damaged_library,
+            commands::list_recent_uses,
+            commands::record_snippet_use,
+            commands::get_quick_shortcut,
+            commands::set_quick_shortcut,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

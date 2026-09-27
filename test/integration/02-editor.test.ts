@@ -104,11 +104,14 @@ describe("edit -> save -> revisions -> restart", () => {
     expect(result).toEqual({ ok: false, error: { kind: "clipboard-unavailable", cause: "clipboard is unavailable" } });
   });
 
-  it("corrupt preview data starts again from the examples instead of breaking the page", async () => {
+  it("corrupt preview data is reported and kept, not silently replaced by the examples", async () => {
     storage.setItem("snippet-desk:browser-preview", "{not json");
     restart();
     const listed = await store.listSnippetsRemote();
-    expect(listed.ok && listed.value.length).toBe(3);
+    expect(listed.ok).toBe(false);
+    expect(!listed.ok && listed.error.message).toMatch(/^database-corrupted:/);
+    // Nothing was written over it: the unreadable data is still there to recover.
+    expect(storage.getItem("snippet-desk:browser-preview")).toBe("{not json");
   });
 
   // "Отмена импорта" from this milestone's card has no code yet: import arrives with M3 (T13–T18).

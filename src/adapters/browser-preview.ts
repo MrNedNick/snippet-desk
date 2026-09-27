@@ -3,6 +3,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import type { Collection, Revision, Snippet } from "../domain/01-library/types";
 import { normalizeTag, validateCollectionName } from "../domain/03-organize/organize";
 import { MAX_TAGS_PER_SNIPPET } from "../domain/03-organize/types";
+import { DEFAULT_SHORTCUT, MAX_RECENT, parseShortcut, recordUse, type UsageEntry } from "../domain/04-quick";
 
 const KEY = "snippet-desk:browser-preview";
 
@@ -10,6 +11,8 @@ interface PreviewData {
   snippets: Snippet[];
   revisions: Revision[];
   collections: Collection[];
+  recent: UsageEntry[];
+  shortcut: string;
 }
 
 const SEED: PreviewData = {
@@ -47,20 +50,35 @@ const SEED: PreviewData = {
   ],
   revisions: [],
   collections: [{ id: "seed-frontend", name: "Frontend" }],
+  recent: [],
+  shortcut: DEFAULT_SHORTCUT,
 };
 
-function load(storage: Storage): PreviewData {
+/**
+ * The browser's copy of the library. Data that can't be read is the preview's version of a damaged
+ * database file: it is kept as it is — not silently replaced by the examples, which the next save would
+ * then write over it — and every command reports `database-corrupted` until the user sets it aside.
+ */
+function load(storage: Storage): { data: PreviewData; damage: string | null } {
+  const raw = storage.getItem(KEY);
+  if (!raw) return { data: structuredClone(SEED), damage: null };
   try {
-    const raw = storage.getItem(KEY);
-    if (raw) {
-      const data = JSON.parse(raw) as Partial<PreviewData>;
-      // Data saved before collections existed simply has none yet.
-      return { snippets: data.snippets ?? [], revisions: data.revisions ?? [], collections: data.collections ?? [] };
-    }
-  } catch {
-    // Unreadable preview data: start again from the examples.
+    const data = JSON.parse(raw) as Partial<PreviewData>;
+    if (!data || typeof data !== "object" || !Array.isArray(data.snippets)) throw new Error("no snippet list");
+    // Data saved before collections, recent uses or the shortcut existed simply has none yet.
+    return {
+      data: {
+        snippets: data.snippets,
+        revisions: data.revisions ?? [],
+        collections: data.collections ?? [],
+        recent: data.recent ?? [],
+        shortcut: data.shortcut ?? DEFAULT_SHORTCUT,
+      },
+      damage: null,
+    };
+  } catch (cause) {
+    return { data: structuredClone(SEED), damage: `preview data is unreadable (${cause instanceof Error ? cause.message : String(cause)})` };
   }
-  return structuredClone(SEED);
 }
 
 type Args = Record<string, unknown>;
@@ -79,7 +97,9 @@ function validate(input: { title: string; code: string; language: string }): str
  * of the app's SQLite file. The command names, arguments and failure reasons are the desktop ones.
  */
 export function previewCommands(storage: Storage, now: () => string = () => new Date().toISOString()) {
-  let data = load(storage);
+  const loaded = load(storage);
+  let data = loaded.data;
+  let damage = loaded.damage;
   const save = () => storage.setItem(KEY, JSON.stringify(data));
   const touch = (id: string, patch: Partial<Snippet>): Snippet => {
     const current = data.snippets.find((s) => s.id === id);
@@ -93,7 +113,45 @@ export function previewCommands(storage: Storage, now: () => string = () => new 
 
   return (cmd: string, payload?: InvokeArgs): unknown => {
     const args = (payload ?? {}) as Args;
+    // Same answers as the desktop app with a damaged file: health and the way out work, nothing else.
+    if (damage !== null) {
+      if (cmd === "library_health") return { status: "damaged", detail: damage };
+      if (cmd === "set_aside_damaged_library") {
+        const kept = `${KEY}:damaged-${Date.parse(now())}`;
+        storage.setItem(kept, storage.getItem(KEY) ?? "");
+        data = structuredClone(SEED);
+        damage = null;
+        save();
+        return kept;
+      }
+      if (cmd !== "get_quick_shortcut") throw `database-corrupted: ${damage}`;
+    }
     switch (cmd) {
+      case "library_health":
+        return { status: "ok", detail: null };
+      case "set_aside_damaged_library":
+        throw "database-not-damaged";
+      case "list_recent_uses": {
+        const ids = new Set(data.snippets.map((s) => s.id));
+        return data.recent.filter((entry) => ids.has(entry.snippetId)).slice(0, MAX_RECENT);
+      }
+      case "record_snippet_use": {
+        const id = String(args.id);
+        if (!data.snippets.some((s) => s.id === id)) throw "snippet-not-found";
+        data = { ...data, recent: recordUse(data.recent, id, now()) };
+        save();
+        return data.recent;
+      }
+      // A web page cannot own a system-wide shortcut; the preview says so and keeps the choice anyway.
+      case "get_quick_shortcut":
+        return { accelerator: data.shortcut, registered: false, error: "shortcut-unavailable: global shortcuts need the desktop app" };
+      case "set_quick_shortcut": {
+        const parsed = parseShortcut(String(args.accelerator));
+        if (!parsed.ok) throw `shortcut-unavailable: ${parsed.error.reason}`;
+        data = { ...data, shortcut: parsed.value.accelerator };
+        save();
+        return { accelerator: data.shortcut, registered: false, error: "shortcut-unavailable: global shortcuts need the desktop app" };
+      }
       case "list_snippets":
         return byNewest(data.snippets);
       case "search_snippets": {

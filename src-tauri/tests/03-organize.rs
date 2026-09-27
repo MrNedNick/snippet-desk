@@ -4,7 +4,6 @@
 use rusqlite::Connection;
 use snippet_desk_lib::commands;
 use snippet_desk_lib::db::{self, DbState, NewSnippetInput};
-use std::sync::Mutex;
 use tauri::Manager;
 
 fn temp_db_path(name: &str) -> std::path::PathBuf {
@@ -13,7 +12,7 @@ fn temp_db_path(name: &str) -> std::path::PathBuf {
 
 fn app(conn: Connection) -> tauri::App<tauri::test::MockRuntime> {
     tauri::test::mock_builder()
-        .manage(DbState(Mutex::new(conn)))
+        .manage(DbState::new(conn))
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .expect("mock app")
 }

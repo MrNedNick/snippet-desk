@@ -1,8 +1,88 @@
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
-pub struct DbState(pub Mutex<Connection>);
+/// The library connection, and whether the file behind it turned out to be damaged.
+///
+/// A damaged file does not stop the app: it starts on an empty in-memory database, every command
+/// answers `database-corrupted: …` instead of showing an empty library, and `set_aside_and_reset`
+/// moves the file out of the way (never deletes it) and opens a fresh one.
+pub struct DbState {
+    conn: Mutex<Connection>,
+    damage: Mutex<Option<String>>,
+    path: Option<PathBuf>,
+}
+
+impl DbState {
+    pub fn new(conn: Connection) -> Self {
+        Self { conn: Mutex::new(conn), damage: Mutex::new(None), path: None }
+    }
+
+    /// Opens the library at `path`, checking it with `PRAGMA quick_check`.
+    pub fn open(path: &Path) -> Self {
+        match open_connection(path).and_then(|conn| check_integrity(&conn).map(|_| conn)) {
+            Ok(conn) => Self { conn: Mutex::new(conn), damage: Mutex::new(None), path: Some(path.to_path_buf()) },
+            Err(err) => Self {
+                conn: Mutex::new(Connection::open_in_memory().expect("in-memory database")),
+                damage: Mutex::new(Some(err.to_string())),
+                path: Some(path.to_path_buf()),
+            },
+        }
+    }
+
+    /// The connection, unless the library is damaged or a previous command panicked holding it.
+    pub fn lock(&self) -> Result<MutexGuard<'_, Connection>, String> {
+        if let Some(detail) = self.damage() {
+            return Err(format!("database-corrupted: {detail}"));
+        }
+        self.conn.lock().map_err(|_| "db-lock-poisoned".to_string())
+    }
+
+    pub fn damage(&self) -> Option<String> {
+        self.damage.lock().ok().and_then(|damage| damage.clone())
+    }
+
+    /// Renames the damaged file (and its `-wal`/`-shm` companions) to `<name>.damaged-<unix time>`,
+    /// opens a fresh library in its place and returns the name the damaged file was kept under.
+    pub fn set_aside_and_reset(&self) -> Result<String, String> {
+        if self.damage().is_none() {
+            return Err("database-not-damaged".into());
+        }
+        let path = self.path.as_ref().ok_or_else(|| "database-has-no-file".to_string())?;
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or_default();
+        let kept = path.with_extension(format!("damaged-{stamp}.sqlite3"));
+        if path.exists() {
+            std::fs::rename(path, &kept).map_err(|err| err.to_string())?;
+        }
+        for suffix in ["-wal", "-shm"] {
+            let companion = PathBuf::from(format!("{}{suffix}", path.display()));
+            if companion.exists() {
+                let _ = std::fs::rename(&companion, PathBuf::from(format!("{}{suffix}", kept.display())));
+            }
+        }
+        let fresh = open_connection(path).map_err(|err| err.to_string())?;
+        *self.conn.lock().map_err(|_| "db-lock-poisoned".to_string())? = fresh;
+        *self.damage.lock().map_err(|_| "db-lock-poisoned".to_string())? = None;
+        Ok(kept.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default())
+    }
+}
+
+/// `PRAGMA quick_check` answers `ok` for a healthy file and a list of problems otherwise.
+pub fn check_integrity(conn: &Connection) -> rusqlite::Result<()> {
+    let verdict: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    if verdict == "ok" {
+        Ok(())
+    } else {
+        Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CORRUPT),
+            Some(format!("database disk image is malformed: {verdict}")),
+        ))
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -77,6 +157,7 @@ pub fn open_connection(path: &std::path::Path) -> rusqlite::Result<Connection> {
         CREATE INDEX IF NOT EXISTS revisions_by_snippet ON revisions (snippet_id, created_at);",
     )?;
     crate::organize::migrate(&conn)?;
+    crate::quick::migrate(&conn)?;
     Ok(conn)
 }
 
