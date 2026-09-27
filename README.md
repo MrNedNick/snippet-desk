@@ -21,8 +21,12 @@ paste it straight into whatever editor you're in.
 - **A damaged library is not an empty one** — if the SQLite file can't be
   read, the app says so instead of crashing or showing nothing, and can set
   the file aside (never delete it) to start fresh.
+- **Import, export and backups** — export the library to one JSON file and
+  import it elsewhere with a preview of what will be added, updated or
+  skipped as a duplicate; a backup is made before every import, and any
+  backup can be restored (after backing up what it replaces).
 
-Coming next: import, export and backups.
+Coming next: signed builds and updates.
 
 ## Stack
 
@@ -70,7 +74,8 @@ Walkthroughs with the edge cases and where each one is tested:
 [library and search](docs/examples/01-library.md),
 [editor, highlighting and earlier versions](docs/examples/02-editor.md),
 [tags and collections](docs/examples/03-organize.md),
-[quick search and the clipboard](docs/examples/04-quick.md).
+[quick search and the clipboard](docs/examples/04-quick.md),
+[import, export and backups](docs/examples/05-backup.md).
 
 CI runs all of the above on every push and attaches the browser-preview
 build as the `snippet-desk-preview` artifact.
