@@ -25,6 +25,26 @@ pub struct NewSnippetInput {
     pub language: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSnippetInput {
+    pub id: String,
+    pub title: String,
+    pub code: String,
+    pub language: String,
+    pub note: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RevisionDto {
+    pub id: String,
+    pub snippet_id: String,
+    pub code: String,
+    pub note: String,
+    pub created_at: String,
+}
+
 pub fn open_connection(path: &std::path::Path) -> rusqlite::Result<Connection> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).expect("failed to create app data dir");
@@ -46,7 +66,15 @@ pub fn open_connection(path: &std::path::Path) -> rusqlite::Result<Connection> {
             title,
             code,
             language
-        );",
+        );
+        CREATE TABLE IF NOT EXISTS revisions (
+            id TEXT PRIMARY KEY,
+            snippet_id TEXT NOT NULL REFERENCES snippets(id) ON DELETE CASCADE,
+            code TEXT NOT NULL,
+            note TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );
+        CREATE INDEX IF NOT EXISTS revisions_by_snippet ON revisions (snippet_id, created_at);",
     )?;
     Ok(conn)
 }
@@ -114,6 +142,73 @@ pub fn search(conn: &Connection, raw_query: &str) -> rusqlite::Result<Vec<Snippe
     rows.collect()
 }
 
+/// Saves a new title, code and language for an existing snippet in one
+/// transaction. When the code changes, the previous code is kept as a
+/// revision with `note`; a rename alone leaves no revision. The FTS row is
+/// replaced so search sees the new text. `Ok(None)` when no snippet has `id`.
+pub fn update_snippet(
+    conn: &mut Connection,
+    id: &str,
+    title: &str,
+    code: &str,
+    language: &str,
+    note: &str,
+) -> rusqlite::Result<Option<SnippetDto>> {
+    let tx = conn.transaction()?;
+    let previous: Option<String> = match tx.query_row(
+        "SELECT code FROM snippets WHERE id = ?1",
+        rusqlite::params![id],
+        |row| row.get(0),
+    ) {
+        Ok(code) => Some(code),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(other) => return Err(other),
+    };
+    let Some(previous) = previous else {
+        return Ok(None);
+    };
+    if previous != code {
+        tx.execute(
+            "INSERT INTO revisions (id, snippet_id, code, note) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![uuid::Uuid::new_v4().to_string(), id, previous, note],
+        )?;
+    }
+    let updated = tx.query_row(
+        "UPDATE snippets
+         SET title = ?2, code = ?3, language = ?4,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ?1
+         RETURNING id, title, code, language, tag_ids, collection_id, created_at, updated_at",
+        rusqlite::params![id, title, code, language],
+        row_to_snippet,
+    )?;
+    tx.execute("DELETE FROM snippets_fts WHERE id = ?1", rusqlite::params![id])?;
+    tx.execute(
+        "INSERT INTO snippets_fts (id, title, code, language) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![updated.id, updated.title, updated.code, updated.language],
+    )?;
+    tx.commit()?;
+    Ok(Some(updated))
+}
+
+/// Earlier versions of a snippet's code, newest first.
+pub fn list_revisions(conn: &Connection, snippet_id: &str) -> rusqlite::Result<Vec<RevisionDto>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, snippet_id, code, note, created_at FROM revisions
+         WHERE snippet_id = ?1 ORDER BY created_at DESC, rowid DESC",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![snippet_id], |row| {
+        Ok(RevisionDto {
+            id: row.get("id")?,
+            snippet_id: row.get("snippet_id")?,
+            code: row.get("code")?,
+            note: row.get("note")?,
+            created_at: row.get("created_at")?,
+        })
+    })?;
+    rows.collect()
+}
+
 /// FTS5 MATCH treats bare terms as a query language (`AND`/`OR`/`-`/`*` are
 /// operators); quoting each term keeps arbitrary user input safe to pass in.
 fn fts_query(raw: &str) -> String {
@@ -172,6 +267,32 @@ mod tests {
         // query containing them must not panic or be treated as a query.
         let odd_query = search(&conn, "OR -\"debounce\"").expect("search with fts operators");
         assert_eq!(odd_query.len(), 0);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn editing_the_code_keeps_the_old_code_as_a_revision_and_search_sees_the_new_text() {
+        let path = temp_db_path("update");
+        let mut conn = open_connection(&path).expect("open");
+        insert_snippet(&conn, "id-1", "Debounce", "fn debounce() {}", "rust").expect("insert");
+
+        let renamed = update_snippet(&mut conn, "id-1", "Debounce fn", "fn debounce() {}", "rust", "")
+            .expect("rename")
+            .expect("found");
+        assert_eq!(renamed.title, "Debounce fn");
+        assert!(list_revisions(&conn, "id-1").expect("revisions").is_empty());
+
+        update_snippet(&mut conn, "id-1", "Debounce fn", "fn throttle() {}", "rust", "rename body")
+            .expect("update")
+            .expect("found");
+        let revisions = list_revisions(&conn, "id-1").expect("revisions");
+        assert_eq!(revisions.len(), 1);
+        assert_eq!(revisions[0].code, "fn debounce() {}");
+        assert_eq!(revisions[0].note, "rename body");
+        assert_eq!(search(&conn, "throttle").expect("search").len(), 1);
+        assert_eq!(search(&conn, "debounce").expect("search").len(), 1); // still in the title
+        assert!(update_snippet(&mut conn, "missing", "t", "c", "l", "").expect("update").is_none());
 
         std::fs::remove_file(&path).ok();
     }

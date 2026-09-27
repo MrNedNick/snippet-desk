@@ -4,6 +4,7 @@
   import { copySnippetToClipboard, normalizeSearchQuery } from "../../domain/01-library/operations";
   import { clipboardWriter } from "../../adapters/clipboard";
   import { createSnippetRemote, listSnippetsRemote, searchSnippetsRemote } from "../../adapters/snippet-store";
+  import { HighlightedCode, SnippetEditor } from "../02-editor";
 
   let snippets = $state<Snippet[]>([]);
   let loading = $state(true);
@@ -20,6 +21,13 @@
   let searchError = $state("");
 
   let copyFeedback = $state<Record<string, string>>({});
+  let editingId = $state<string | null>(null);
+  const editing = $derived(snippets.find((snippet) => snippet.id === editingId) ?? null);
+
+  function onSaved(saved: Snippet) {
+    snippets = [saved, ...snippets.filter((snippet) => snippet.id !== saved.id)];
+    if (searchResults) searchResults = searchResults.map((snippet) => (snippet.id === saved.id ? saved : snippet));
+  }
 
   async function loadSnippets() {
     loading = true;
@@ -90,6 +98,11 @@
 </script>
 
 <section class="library">
+  {#if editing}
+    {#key editing.id}
+      <SnippetEditor snippet={editing} onsaved={onSaved} onclose={() => (editingId = null)} />
+    {/key}
+  {:else}
   <form class="create-form" onsubmit={handleCreate}>
     <h2>New snippet</h2>
     <label>
@@ -109,6 +122,7 @@
     {/if}
     <button type="submit" disabled={saving}>{saving ? "Saving…" : "Save snippet"}</button>
   </form>
+  {/if}
 
   <div class="list-panel">
     <form class="search-form" onsubmit={handleSearch}>
@@ -133,14 +147,20 @@
     {:else}
       <ul class="snippets">
         {#each visibleSnippets as snippet (snippet.id)}
-          <li class="snippet">
+          <li class="snippet" class:is-editing={editingId === snippet.id}>
             <div class="snippet-header">
               <strong>{snippet.title}</strong>
               <span class="language">{snippet.language}</span>
             </div>
-            <pre class="code">{snippet.code}</pre>
+            <pre class="code"><HighlightedCode code={snippet.code} language={snippet.language} /></pre>
             <div class="snippet-actions">
               <button type="button" onclick={() => handleCopy(snippet)}>Copy</button>
+              <button
+                type="button"
+                aria-pressed={editingId === snippet.id}
+                aria-label="Edit {snippet.title}"
+                onclick={() => (editingId = snippet.id)}>Edit</button
+              >
               {#if copyFeedback[snippet.id]}
                 <span class="feedback">{copyFeedback[snippet.id]}</span>
               {/if}
@@ -155,7 +175,7 @@
 <style>
   .library {
     display: grid;
-    grid-template-columns: minmax(240px, 320px) 1fr;
+    grid-template-columns: minmax(280px, 420px) minmax(0, 1fr);
     gap: 1.5rem;
     padding: 1.5rem;
     max-width: 960px;
@@ -164,12 +184,14 @@
 
   @media (max-width: 640px) {
     .library {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
+      padding: 1rem;
     }
   }
 
   .create-form,
   .list-panel {
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
@@ -212,6 +234,10 @@
     border: 1px solid var(--border, #ccc);
     border-radius: 8px;
     padding: 0.75rem;
+  }
+
+  .snippet.is-editing {
+    border-color: light-dark(#1f4fd8, #8fb0ff);
   }
 
   .snippet-header {

@@ -5,6 +5,41 @@
     <link rel="icon" href="%sveltekit.assets%/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>snippet-desk</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        --border: light-dark(#c9c9d1, #3d3e45);
+      }
+      body {
+        margin: 0;
+        background: Canvas;
+        color: CanvasText;
+      }
+      button {
+        font: inherit;
+        padding: 0.35rem 0.75rem;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: light-dark(#fff, #25262b);
+        color: inherit;
+        cursor: pointer;
+      }
+      button[type="submit"] {
+        background: light-dark(#1f4fd8, #6d93ff);
+        border-color: transparent;
+        color: light-dark(#fff, #10131a);
+      }
+      input,
+      textarea {
+        background: light-dark(#fff, #1b1c20);
+        color: inherit;
+      }
+      :focus-visible {
+        outline: 3px solid #4c8dff;
+        outline-offset: 2px;
+      }
+    </style>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

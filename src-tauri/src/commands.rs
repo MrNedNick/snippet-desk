@@ -1,4 +1,4 @@
-use crate::db::{self, DbState, NewSnippetInput, SnippetDto};
+use crate::db::{self, DbState, NewSnippetInput, RevisionDto, SnippetDto, UpdateSnippetInput};
 use tauri::State;
 
 #[tauri::command]
@@ -36,4 +36,33 @@ pub fn search_snippets(state: State<DbState>, query: String) -> Result<Vec<Snipp
     }
     let conn = state.0.lock().map_err(|_| "db-lock-poisoned".to_string())?;
     db::search(&conn, &query).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn update_snippet(
+    state: State<DbState>,
+    input: UpdateSnippetInput,
+) -> Result<SnippetDto, String> {
+    let title = input.title.trim();
+    if title.is_empty() {
+        return Err("title-empty".into());
+    }
+    if input.code.is_empty() {
+        return Err("code-empty".into());
+    }
+    let language = input.language.trim();
+    if language.is_empty() {
+        return Err("language-empty".into());
+    }
+
+    let mut conn = state.0.lock().map_err(|_| "db-lock-poisoned".to_string())?;
+    db::update_snippet(&mut conn, &input.id, title, &input.code, language, input.note.trim())
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "snippet-not-found".to_string())
+}
+
+#[tauri::command]
+pub fn list_revisions(state: State<DbState>, snippet_id: String) -> Result<Vec<RevisionDto>, String> {
+    let conn = state.0.lock().map_err(|_| "db-lock-poisoned".to_string())?;
+    db::list_revisions(&conn, &snippet_id).map_err(|err| err.to_string())
 }

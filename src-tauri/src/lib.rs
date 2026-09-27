@@ -23,6 +23,8 @@ pub fn run() {
             commands::create_snippet,
             commands::list_snippets,
             commands::search_snippets,
+            commands::update_snippet,
+            commands::list_revisions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
