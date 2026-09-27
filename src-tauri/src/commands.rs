@@ -294,3 +294,23 @@ pub fn list_backups(backups: State<BackupDir>) -> Vec<backup::BackupInfo> {
 pub fn restore_backup(state: State<DbState>, backups: State<BackupDir>, name: String) -> Result<backup::BackupInfo, String> {
     backup::restore_backup(&mut *lock(&state)?, &backups.0, &name)
 }
+
+#[tauri::command]
+pub fn app_version(app: tauri::AppHandle) -> crate::updates::AppVersionDto {
+    crate::updates::app_version(&app)
+}
+
+/// `updates-not-configured` when this build has no updater key; `update-check-failed: …` when the
+/// release feed can't be read or its answer can't be trusted.
+#[tauri::command]
+pub async fn check_for_updates(
+    app: tauri::AppHandle,
+    pending: State<'_, crate::updates::PendingUpdate>,
+) -> Result<crate::updates::UpdateCheckDto, String> {
+    crate::updates::check(&app, &pending).await
+}
+
+#[tauri::command]
+pub async fn install_update(app: tauri::AppHandle, pending: State<'_, crate::updates::PendingUpdate>) -> Result<(), String> {
+    crate::updates::install(&app, &pending).await
+}

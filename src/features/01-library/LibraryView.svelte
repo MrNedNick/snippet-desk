@@ -11,6 +11,7 @@
   import { onQuickSearchRequested, recordSnippetUseRemote } from "../../adapters/quick-store";
   import { IN_APP_KEY, QuickSearch } from "../04-quick";
   import { BackupPanel } from "../05-backup";
+  import { AboutPanel } from "../06-release";
   import { createSnippetRemote, listSnippetsRemote, searchSnippetsRemote } from "../../adapters/snippet-store";
   import { HighlightedCode, SnippetEditor } from "../02-editor";
 
@@ -198,6 +199,7 @@
   </form>
   <CollectionsPanel {collections} counts={collectionCounts(snippets).byId} onchange={onCollectionsChanged} />
   <BackupPanel onchange={onCollectionsChanged} />
+  <AboutPanel snippetCount={snippets.length} />
   </div>
   {/if}
 

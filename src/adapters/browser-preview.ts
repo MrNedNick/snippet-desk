@@ -7,6 +7,8 @@ import { DEFAULT_SHORTCUT, MAX_RECENT, parseShortcut, recordUse, type UsageEntry
 import { backupName, buildArchive, MAX_BACKUPS, parseArchive, planImport, serializeArchive, type BackupInfo, type ImportPlan } from "../domain/05-backup";
 
 const KEY = "snippet-desk:browser-preview";
+/** The version in `package.json` and `tauri.conf.json`, which move together. */
+const PREVIEW_VERSION = "0.1.0";
 
 interface PreviewData {
   snippets: Snippet[];
@@ -155,11 +157,17 @@ export function previewCommands(storage: Storage, now: () => string = () => new 
         save();
         return kept;
       }
-      if (cmd !== "get_quick_shortcut") throw `database-corrupted: ${damage}`;
+      if (cmd !== "get_quick_shortcut" && cmd !== "app_version") throw `database-corrupted: ${damage}`;
     }
     switch (cmd) {
       case "library_health":
         return { status: "ok", detail: null };
+      // A web page has no installed version to update; the desktop answers these from the bundle.
+      case "app_version":
+        return { version: PREVIEW_VERSION, platform: "browser", updates: "not-configured" };
+      case "check_for_updates":
+      case "install_update":
+        throw "updates-not-configured";
       // The desktop app writes the file through a save dialog; the page downloads this text instead.
       case "export_library_json":
         return serializeArchive(buildArchive(data, now()));

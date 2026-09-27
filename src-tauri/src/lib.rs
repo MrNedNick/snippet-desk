@@ -4,6 +4,7 @@ pub mod db;
 pub mod organize;
 pub mod quick;
 pub mod shortcut;
+pub mod updates;
 
 use commands::{BackupDir, ImportState, ShortcutState, ShortcutStatus};
 use db::DbState;
@@ -16,7 +17,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init());
     #[cfg(desktop)]
-    let builder = builder.plugin(shortcut::plugin());
+    let builder = builder.plugin(shortcut::plugin()).plugin(tauri_plugin_updater::Builder::new().build());
 
     builder
         .setup(|app| {
@@ -41,6 +42,7 @@ pub fn run() {
             app.manage(ShortcutState(Mutex::new(status)));
             app.manage(ImportState::default());
             app.manage(BackupDir(data_dir.join("backups")));
+            app.manage(updates::PendingUpdate::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -68,6 +70,9 @@ pub fn run() {
             commands::create_backup,
             commands::list_backups,
             commands::restore_backup,
+            commands::app_version,
+            commands::check_for_updates,
+            commands::install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
