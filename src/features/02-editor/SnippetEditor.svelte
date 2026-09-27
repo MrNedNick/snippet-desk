@@ -1,18 +1,29 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import type { Revision, Snippet } from "../../domain/01-library/types";
+  import type { Collection, Revision, Snippet } from "../../domain/01-library/types";
+  import { formatTags, parseTags } from "../../domain/03-organize/organize";
+  import { setCollectionRemote, setTagsRemote } from "../../adapters/organize-store";
+  import { organizeMessage } from "../03-organize/messages";
   import { applyDraft, draftFrom, isDirty } from "../../domain/02-editor/draft";
   import { LANGUAGE_SUGGESTIONS, resolveLanguage } from "../../domain/02-editor/languages";
   import type { EditorDraft } from "../../domain/02-editor/types";
   import { listRevisionsRemote, updateSnippetRemote } from "../../adapters/snippet-store";
   import HighlightedCode from "./HighlightedCode.svelte";
 
-  let { snippet, onsaved, onclose }: { snippet: Snippet; onsaved: (snippet: Snippet) => void; onclose: () => void } =
-    $props();
+  let {
+    snippet,
+    collections,
+    onsaved,
+    onclose,
+  }: { snippet: Snippet; collections: Collection[]; onsaved: (snippet: Snippet) => void; onclose: () => void } = $props();
 
   // The draft starts from the snippet that was opened; the parent remounts the editor for another one.
   // svelte-ignore state_referenced_locally
   let draft = $state<EditorDraft>(draftFrom(snippet));
+  // svelte-ignore state_referenced_locally
+  let tagsText = $state(formatTags(snippet.tagIds));
+  // svelte-ignore state_referenced_locally
+  let collectionId = $state<string>(snippet.collectionId ?? "");
   let saving = $state(false);
   let message = $state<{ kind: "error" | "saved"; text: string } | null>(null);
   let revisions = $state<Revision[] | null>(null);
@@ -22,7 +33,10 @@
   let textarea: HTMLTextAreaElement | undefined = $state();
   let mirror: HTMLPreElement | undefined = $state();
 
-  const dirty = $derived(isDirty(snippet, draft));
+  const parsedTags = $derived(parseTags(tagsText));
+  const tagsChanged = $derived(parsedTags.ok && parsedTags.value.join(",") !== snippet.tagIds.join(","));
+  const collectionChanged = $derived((collectionId || null) !== snippet.collectionId);
+  const dirty = $derived(isDirty(snippet, draft) || tagsChanged || collectionChanged);
   const known = $derived(resolveLanguage(draft.language) !== null);
 
   const REASONS: Record<string, string> = {
@@ -44,15 +58,36 @@
     event?.preventDefault();
     if (saving) return;
     // The domain decides first, so an empty field or an unchanged draft never reaches the database.
+    if (!parsedTags.ok) return void (message = { kind: "error", text: organizeMessage(parsedTags.error) });
+    const contentChanged = isDirty(snippet, draft);
+    if (!contentChanged && !tagsChanged && !collectionChanged) {
+      message = { kind: "error", text: "Nothing to save yet." };
+      return;
+    }
     const checked = applyDraft(snippet, draft);
-    if (!checked.ok) {
-      message = {
-        kind: "error",
-        text: checked.error.kind === "no-changes" ? "Nothing to save yet." : REASONS[checked.error.reason] ?? checked.error.reason,
-      };
+    if (contentChanged && !checked.ok && checked.error.kind === "validation") {
+      message = { kind: "error", text: REASONS[checked.error.reason] ?? checked.error.reason };
       return;
     }
     saving = true;
+    let latest = snippet;
+    if (tagsChanged) {
+      const tagged = await setTagsRemote(snippet.id, parsedTags.value);
+      if (!tagged.ok) return void ((saving = false), (message = { kind: "error", text: organizeMessage(tagged.error) }));
+      latest = tagged.value;
+    }
+    if (collectionChanged) {
+      const filed = await setCollectionRemote(snippet.id, collectionId || null);
+      if (!filed.ok) return void ((saving = false), (message = { kind: "error", text: organizeMessage(filed.error) }));
+      latest = filed.value;
+    }
+    if (!contentChanged) {
+      saving = false;
+      message = { kind: "saved", text: "Saved." };
+      tagsText = formatTags(latest.tagIds);
+      onsaved(latest);
+      return;
+    }
     const result = await updateSnippetRemote(snippet.id, draft);
     saving = false;
     if (!result.ok) {
@@ -71,6 +106,7 @@
     const codeChanged = result.value.code !== snippet.code;
     message = { kind: "saved", text: codeChanged ? "Saved. The previous code is kept below." : "Saved." };
     draft = { ...draftFrom(result.value) };
+    tagsText = formatTags(result.value.tagIds);
     onsaved(result.value);
     if (codeChanged) await loadRevisions();
   }
@@ -136,6 +172,25 @@
       <span class="hint">No colours for this language — the code is shown plain.</span>
     {/if}
   </label>
+
+  <div class="organize">
+    <label>
+      <span>Tags <span class="optional">(comma-separated)</span></span>
+      <input bind:value={tagsText} placeholder="react, hooks" autocomplete="off" />
+      {#if !parsedTags.ok}
+        <span class="field-error">{organizeMessage(parsedTags.error)}</span>
+      {:else if parsedTags.value.length > 0 && formatTags(parsedTags.value) !== tagsText.trim()}
+        <span class="hint">Saved as: {parsedTags.value.map((tag) => `#${tag}`).join(" ")}</span>
+      {/if}
+    </label>
+    <label>
+      Collection
+      <select bind:value={collectionId}>
+        <option value="">No collection</option>
+        {#each collections as collection (collection.id)}<option value={collection.id}>{collection.name}</option>{/each}
+      </select>
+    </label>
+  </div>
 
   <div class="code-field">
     <span class="label" id="editor-code-label">Code</span>
@@ -235,6 +290,32 @@
     flex-direction: column;
     gap: 0.25rem;
     font-size: 0.9rem;
+  }
+
+  .organize {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    gap: 0.75rem;
+  }
+
+  @media (max-width: 480px) {
+    .organize {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  select {
+    font: inherit;
+    padding: 0.5rem;
+    border-radius: 6px;
+    border: 1px solid var(--border, #ccc);
+    background: light-dark(#fff, #1b1c20);
+    color: inherit;
+  }
+
+  .field-error {
+    font-size: 0.8rem;
+    color: light-dark(#c0392b, #ff8a80);
   }
 
   input {

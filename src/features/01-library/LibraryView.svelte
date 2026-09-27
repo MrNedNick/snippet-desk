@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import type { Snippet } from "../../domain/01-library/types";
+  import type { Collection, Snippet } from "../../domain/01-library/types";
+  import { collectionCounts, filterSnippets } from "../../domain/03-organize/organize";
+  import type { LibraryFilter } from "../../domain/03-organize/types";
+  import { listCollectionsRemote } from "../../adapters/organize-store";
+  import { CollectionsPanel, FilterBar } from "../03-organize";
   import { copySnippetToClipboard, normalizeSearchQuery } from "../../domain/01-library/operations";
   import { clipboardWriter } from "../../adapters/clipboard";
   import { createSnippetRemote, listSnippetsRemote, searchSnippetsRemote } from "../../adapters/snippet-store";
@@ -19,6 +23,42 @@
   let searchTerm = $state("");
   let searchResults = $state<Snippet[] | null>(null);
   let searchError = $state("");
+
+  const FILTER_KEY = "snippet-desk:filter";
+  function loadFilter(): LibraryFilter {
+    try {
+      const saved = JSON.parse(localStorage.getItem(FILTER_KEY) ?? "null") as LibraryFilter | null;
+      if (saved && "collection" in saved && "tag" in saved) return saved;
+    } catch {
+      // A filter that can't be read is simply not restored.
+    }
+    return { collection: null, tag: null };
+  }
+
+  let collections = $state<Collection[]>([]);
+  let filter = $state<LibraryFilter>(loadFilter());
+
+  function setFilter(next: LibraryFilter) {
+    filter = next;
+    try {
+      localStorage.setItem(FILTER_KEY, JSON.stringify(next));
+    } catch {
+      // Not remembering the filter is fine.
+    }
+  }
+
+  async function loadCollections() {
+    const result = await listCollectionsRemote();
+    if (result.ok) collections = result.value;
+    // A collection that no longer exists would show an empty list with no way back: fall back to all.
+    if (filter.collection && filter.collection !== "unfiled" && !collections.some((c) => c.id === filter.collection)) {
+      setFilter({ ...filter, collection: null });
+    }
+  }
+
+  async function onCollectionsChanged() {
+    await Promise.all([loadCollections(), loadSnippets()]);
+  }
 
   let copyFeedback = $state<Record<string, string>>({});
   let editingId = $state<string | null>(null);
@@ -41,7 +81,7 @@
     loading = false;
   }
 
-  onMount(loadSnippets);
+  onMount(() => void Promise.all([loadSnippets(), loadCollections()]));
 
   async function handleCreate(event: Event) {
     event.preventDefault();
@@ -94,15 +134,18 @@
     }, 2000);
   }
 
-  const visibleSnippets = $derived(searchResults ?? snippets);
+  const visibleSnippets = $derived(filterSnippets(searchResults ?? snippets, filter));
+  const collectionName = (id: string | null) => collections.find((c) => c.id === id)?.name ?? null;
+  const filtered = $derived(filter.collection !== null || filter.tag !== null);
 </script>
 
 <section class="library">
   {#if editing}
     {#key editing.id}
-      <SnippetEditor snippet={editing} onsaved={onSaved} onclose={() => (editingId = null)} />
+      <SnippetEditor snippet={editing} {collections} onsaved={onSaved} onclose={() => (editingId = null)} />
     {/key}
   {:else}
+  <div class="side">
   <form class="create-form" onsubmit={handleCreate}>
     <h2>New snippet</h2>
     <label>
@@ -122,6 +165,8 @@
     {/if}
     <button type="submit" disabled={saving}>{saving ? "Saving…" : "Save snippet"}</button>
   </form>
+  <CollectionsPanel {collections} counts={collectionCounts(snippets).byId} onchange={onCollectionsChanged} />
+  </div>
   {/if}
 
   <div class="list-panel">
@@ -132,6 +177,7 @@
         <button type="button" onclick={clearSearch}>Clear</button>
       {/if}
     </form>
+    <FilterBar {snippets} {collections} {filter} onfilter={setFilter} />
     {#if searchError}
       <p class="error" role="alert">{searchError}</p>
     {/if}
@@ -142,8 +188,17 @@
       <p class="error" role="alert">Couldn't load snippets: {listError}</p>
     {:else if visibleSnippets.length === 0}
       <p class="status">
-        {searchResults !== null ? "No snippets match that search." : "No snippets yet — add one above."}
+        {searchResults !== null
+          ? "No snippets match that search."
+          : filtered
+            ? "Nothing here with this filter."
+            : "No snippets yet — add one above."}
       </p>
+      {#if filtered}
+        <button type="button" class="show-all" onclick={() => setFilter({ collection: null, tag: null })}
+          >Show all snippets</button
+        >
+      {/if}
     {:else}
       <ul class="snippets">
         {#each visibleSnippets as snippet (snippet.id)}
@@ -152,6 +207,21 @@
               <strong>{snippet.title}</strong>
               <span class="language">{snippet.language}</span>
             </div>
+            {#if snippet.tagIds.length > 0 || snippet.collectionId}
+              <div class="meta">
+                {#if collectionName(snippet.collectionId)}
+                  <span class="collection">{collectionName(snippet.collectionId)}</span>
+                {/if}
+                {#each snippet.tagIds as tag (tag)}
+                  <button
+                    type="button"
+                    class="tag"
+                    aria-label="Show snippets tagged {tag}"
+                    onclick={() => setFilter({ ...filter, tag })}>#{tag}</button
+                  >
+                {/each}
+              </div>
+            {/if}
             <pre class="code"><HighlightedCode code={snippet.code} language={snippet.language} /></pre>
             <div class="snippet-actions">
               <button type="button" onclick={() => handleCopy(snippet)}>Copy</button>
@@ -234,6 +304,38 @@
     border: 1px solid var(--border, #ccc);
     border-radius: 8px;
     padding: 0.75rem;
+  }
+
+  .show-all {
+    align-self: flex-start;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+    margin-top: 0.35rem;
+    font-size: 0.8rem;
+  }
+
+  .collection {
+    padding: 0.1rem 0.5rem;
+    border-radius: 4px;
+    background: color-mix(in srgb, currentColor 10%, transparent);
+  }
+
+  .tag {
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    font: 0.78rem ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  .side {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+    min-width: 0;
   }
 
   .snippet.is-editing {

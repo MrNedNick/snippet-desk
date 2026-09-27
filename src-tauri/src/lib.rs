@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod db;
+pub mod organize;
 
 use db::DbState;
 use std::sync::Mutex;
@@ -25,6 +26,12 @@ pub fn run() {
             commands::search_snippets,
             commands::update_snippet,
             commands::list_revisions,
+            commands::set_snippet_tags,
+            commands::set_snippet_collection,
+            commands::list_collections,
+            commands::create_collection,
+            commands::rename_collection,
+            commands::delete_collection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

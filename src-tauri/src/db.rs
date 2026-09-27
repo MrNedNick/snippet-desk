@@ -76,10 +76,11 @@ pub fn open_connection(path: &std::path::Path) -> rusqlite::Result<Connection> {
         );
         CREATE INDEX IF NOT EXISTS revisions_by_snippet ON revisions (snippet_id, created_at);",
     )?;
+    crate::organize::migrate(&conn)?;
     Ok(conn)
 }
 
-fn row_to_snippet(row: &rusqlite::Row) -> rusqlite::Result<SnippetDto> {
+pub(crate) fn row_to_snippet(row: &rusqlite::Row) -> rusqlite::Result<SnippetDto> {
     let tag_ids_raw: String = row.get("tag_ids")?;
     let tag_ids: Vec<String> = serde_json::from_str(&tag_ids_raw).unwrap_or_default();
     Ok(SnippetDto {
