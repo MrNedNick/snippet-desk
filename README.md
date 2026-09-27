@@ -11,8 +11,11 @@ paste it straight into whatever editor you're in.
   TypeScript/JavaScript, Rust, Python, SQL, CSS, shell or JSON; Tab indents,
   ⌘S saves. Every change to the code keeps the previous version, which can be
   restored into the editor.
+- **Tags and collections** — tag snippets (`react, hooks`; any spelling of a
+  tag is the same tag) and file them in collections; filter the library by
+  collection and tag, and the filter is remembered.
 
-Coming next: tags and collections, then the global shortcut.
+Coming next: the global shortcut and pasting into the editor you are in.
 
 ## Stack
 
@@ -58,4 +61,5 @@ cargo test  # Rust unit + integration tests (run from src-tauri/)
 
 Walkthroughs with the edge cases and where each one is tested:
 [library and search](docs/examples/01-library.md),
-[editor, highlighting and earlier versions](docs/examples/02-editor.md).
+[editor, highlighting and earlier versions](docs/examples/02-editor.md),
+[tags and collections](docs/examples/03-organize.md).
